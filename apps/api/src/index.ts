@@ -14,6 +14,7 @@ import type { ExtractedInvoice } from "./types.js";
 
 const app = express();
 const port = Number(process.env.API_PORT ?? 4000);
+const MAX_EXTRACTION_RETRIES = Number(process.env.EXTRACT_MAX_RETRIES ?? 1);
 
 app.use(cors());
 app.use(express.json({ limit: "15mb" }));
@@ -33,6 +34,7 @@ const extractedInvoiceSchema = z.object({
   subTotal: z.number(),
   tax: z.number(),
   total: z.number(),
+  additionalFields: z.record(z.string()).default({}),
   confidence: z.number().min(0).max(1),
   lineItems: z.array(
     z.object({
@@ -178,7 +180,7 @@ async function processInvoice(invoiceId: string): Promise<void> {
         mimeType: current.mimeType,
         fileName: current.fileName
       },
-      2
+      MAX_EXTRACTION_RETRIES
     );
     const assessment = assessExtractionQuality(extracted);
     updateInvoiceStatus(invoiceId, assessment.status, {
@@ -316,6 +318,7 @@ function toCsv(extracted: ExtractedInvoice): string {
     ["Total", extracted.total.toFixed(2)],
     ["Confidence", extracted.confidence.toFixed(2)]
   ];
+  const additionalRows = Object.entries(extracted.additionalFields ?? {});
   const lineItemRows = extracted.lineItems.map((item) => [
     item.description,
     item.quantity.toString(),
@@ -327,6 +330,14 @@ function toCsv(extracted: ExtractedInvoice): string {
   lines.push("Field,Value");
   for (const row of metaRows) {
     lines.push(row.map(csvEscape).join(","));
+  }
+  lines.push("");
+  if (additionalRows.length > 0) {
+    lines.push("Additional Field,Value");
+    for (const row of additionalRows) {
+      lines.push(row.map(csvEscape).join(","));
+    }
+    lines.push("");
   }
   lines.push("");
   lines.push("Description,Quantity,Unit Price,Amount");

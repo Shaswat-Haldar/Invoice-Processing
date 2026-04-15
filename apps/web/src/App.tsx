@@ -31,6 +31,8 @@ export default function App() {
   const [isSavingEdits, setIsSavingEdits] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [draftExtracted, setDraftExtracted] = useState<ExtractedInvoice | null>(null);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingSeconds, setProcessingSeconds] = useState(0);
 
   const selectedStatus = selectedInvoice?.status;
   const isProcessing = selectedStatus === "queued" || selectedStatus === "processing";
@@ -97,6 +99,33 @@ export default function App() {
   useEffect(() => {
     setDraftExtracted(selectedInvoice?.extracted ? deepCloneExtracted(selectedInvoice.extracted) : null);
   }, [selectedInvoice?.id, selectedInvoice?.updatedAt]);
+
+  useEffect(() => {
+    if (!isProcessing) {
+      if (processingProgress > 0) {
+        setProcessingProgress(100);
+        const timer = window.setTimeout(() => {
+          setProcessingProgress(0);
+          setProcessingSeconds(0);
+        }, 600);
+        return () => window.clearTimeout(timer);
+      }
+      return;
+    }
+
+    setProcessingProgress((prev) => (prev <= 0 ? 8 : prev));
+    const start = Date.now();
+    const interval = window.setInterval(() => {
+      const elapsedSec = Math.floor((Date.now() - start) / 1000);
+      setProcessingSeconds(elapsedSec);
+      setProcessingProgress((prev) => {
+        const next = prev + (prev < 75 ? 3 : prev < 90 ? 1.2 : 0.4);
+        return Math.min(95, next);
+      });
+    }, 500);
+
+    return () => window.clearInterval(interval);
+  }, [isProcessing]);
 
   useEffect(() => {
     window.localStorage.setItem(LOCAL_SELECTED_KEY, selectedId);
@@ -253,6 +282,77 @@ export default function App() {
     });
   }
 
+  function addAdditionalField(): void {
+    setDraftExtracted((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const baseKey = "custom_field";
+      let nextKey = baseKey;
+      let counter = 1;
+      while (Object.prototype.hasOwnProperty.call(prev.additionalFields, nextKey)) {
+        counter += 1;
+        nextKey = `${baseKey}_${counter}`;
+      }
+      return {
+        ...prev,
+        additionalFields: {
+          ...prev.additionalFields,
+          [nextKey]: ""
+        }
+      };
+    });
+  }
+
+  function renameAdditionalField(oldKey: string, newKeyRaw: string): void {
+    const newKey = newKeyRaw.trim();
+    if (!newKey || newKey === oldKey) {
+      return;
+    }
+    setDraftExtracted((prev) => {
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev.additionalFields, oldKey)) {
+        return prev;
+      }
+      if (Object.prototype.hasOwnProperty.call(prev.additionalFields, newKey)) {
+        return prev;
+      }
+      const next = { ...prev.additionalFields };
+      const existingValue = next[oldKey];
+      delete next[oldKey];
+      next[newKey] = existingValue;
+      return { ...prev, additionalFields: next };
+    });
+  }
+
+  function updateAdditionalFieldValue(key: string, value: string): void {
+    setDraftExtracted((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        additionalFields: {
+          ...prev.additionalFields,
+          [key]: value
+        }
+      };
+    });
+  }
+
+  function removeAdditionalField(key: string): void {
+    setDraftExtracted((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = { ...prev.additionalFields };
+      delete next[key];
+      return {
+        ...prev,
+        additionalFields: next
+      };
+    });
+  }
+
   return (
     <div className="min-h-screen p-4 md:p-8">
       <div className="mx-auto max-w-7xl animate-fade-in">
@@ -378,6 +478,21 @@ export default function App() {
                   ) : null}
                 </div>
 
+                {isProcessing ? (
+                  <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <div className="mb-2 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+                      <span>Processing invoice extraction...</span>
+                      <span>{processingSeconds}s</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                      <div
+                        className="h-full rounded bg-blue-600 transition-all duration-500"
+                        style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
                 {selectedInvoice.errorMessage ? (
                   <p
                     className={`rounded-lg border p-3 text-sm ${
@@ -432,6 +547,46 @@ export default function App() {
                         label="Confidence"
                         value={`${Math.round(draftExtracted.confidence * 100)}%`}
                       />
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                      <div className="mb-2 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">Additional Categories / Fields</h3>
+                        <button
+                          className="rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700"
+                          onClick={() => addAdditionalField()}
+                        >
+                          Add Field
+                        </button>
+                      </div>
+                      {Object.keys(draftExtracted.additionalFields).length === 0 ? (
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          No additional fields extracted.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {Object.entries(draftExtracted.additionalFields).map(([key, value]) => (
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_2fr_auto]" key={key}>
+                              <input
+                                className="rounded border border-slate-300 bg-white p-1 text-sm dark:border-slate-700 dark:bg-slate-900"
+                                value={key}
+                                onChange={(event) => renameAdditionalField(key, event.target.value)}
+                              />
+                              <input
+                                className="rounded border border-slate-300 bg-white p-1 text-sm dark:border-slate-700 dark:bg-slate-900"
+                                value={value}
+                                onChange={(event) => updateAdditionalFieldValue(key, event.target.value)}
+                              />
+                              <button
+                                className="rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700"
+                                onClick={() => removeAdditionalField(key)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
@@ -692,7 +847,8 @@ function applyTheme(theme: ThemeMode): void {
 function deepCloneExtracted(extracted: ExtractedInvoice): ExtractedInvoice {
   return {
     ...extracted,
-    lineItems: extracted.lineItems.map((item) => ({ ...item }))
+    lineItems: extracted.lineItems.map((item) => ({ ...item })),
+    additionalFields: { ...(extracted.additionalFields ?? {}) }
   };
 }
 
@@ -704,6 +860,11 @@ function normalizeExtractedForSave(extracted: ExtractedInvoice): ExtractedInvoic
     tax: toNumber(extracted.tax),
     total: toNumber(extracted.total),
     confidence: Math.min(1, Math.max(0, toNumber(extracted.confidence))),
+    additionalFields: Object.fromEntries(
+      Object.entries(extracted.additionalFields ?? {})
+        .map(([key, value]) => [key.trim(), String(value).trim()])
+        .filter(([key, value]) => key.length > 0 && value.length > 0)
+    ),
     lineItems: extracted.lineItems.map((item) => ({
       description: item.description.trim() || "Item",
       quantity: toNumber(item.quantity),

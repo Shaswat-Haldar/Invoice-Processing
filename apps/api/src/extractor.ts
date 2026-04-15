@@ -5,6 +5,10 @@ export class ExtractorError extends Error {
   retryAfterSeconds?: number;
 }
 
+const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS ?? 35000);
+const MODEL_CACHE_TTL_MS = Number(process.env.GEMINI_MODELS_CACHE_TTL_MS ?? 5 * 60 * 1000);
+let cachedModelList: { models: string[]; expiresAt: number } | null = null;
+
 export async function extractInvoiceData(input: {
   fileBase64: string;
   mimeType: string;
@@ -56,6 +60,9 @@ Return ONLY strict JSON using this exact shape:
   "subTotal": number,
   "tax": number,
   "total": number,
+  "additionalFields": {
+    "any_extra_field_name": "string value"
+  },
   "confidence": number between 0 and 1,
   "lineItems": [
     {
@@ -71,6 +78,8 @@ Never include markdown, code fences, or extra text.
 
   const prompt = `${schemaInstructions}
 Extract values from the attached invoice document. Handle both scanned images and PDFs.
+Capture ALL visible line items exhaustively, including service lines, discounts, shipping, handling, freight, and charges.
+If there are invoice categories not represented in core fields, include them in additionalFields as key-value pairs.
 If any numeric field appears with commas or currency symbols, normalize it to plain numeric format.
 If any field is unavailable, set a sensible default.
 `;
@@ -78,6 +87,7 @@ If any field is unavailable, set a sensible default.
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json"
       },
@@ -130,7 +140,7 @@ If any field is unavailable, set a sensible default.
     throw new Error("Gemini response did not contain text output.");
   }
 
-  const parsed = JSON.parse(raw) as Partial<ExtractedInvoice>;
+  const parsed = safeJsonParse(raw);
   return sanitizeExtractedInvoice(parsed);
 }
 
@@ -155,8 +165,41 @@ function sanitizeExtractedInvoice(data: Partial<ExtractedInvoice>): ExtractedInv
     tax: parseNumeric(data.tax, 0),
     total: parseNumeric(data.total, 0),
     lineItems,
+    additionalFields: sanitizeAdditionalFields(data.additionalFields),
     confidence: Math.min(1, Math.max(0, confidence))
   };
+}
+
+function sanitizeAdditionalFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([key, entryValue]) => [String(key).trim(), stringifyValue(entryValue)] as const)
+    .filter(([key, entryValue]) => key.length > 0 && entryValue.length > 0);
+
+  return Object.fromEntries(entries);
+}
+
+function stringifyValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyValue(item)).filter(Boolean).join("; ");
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 function parseNumeric(value: unknown, fallback: number): number {
@@ -199,9 +242,14 @@ async function getModelCandidates(apiKey: string): Promise<string[]> {
 }
 
 async function fetchGenerateContentModels(apiKey: string): Promise<string[]> {
+  if (cachedModelList && cachedModelList.expiresAt > Date.now()) {
+    return cachedModelList.models;
+  }
+
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+      { signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, 12000)) }
     );
     if (!response.ok) {
       return [];
@@ -210,11 +258,43 @@ async function fetchGenerateContentModels(apiKey: string): Promise<string[]> {
       models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
     };
     const models = payload.models ?? [];
-    return models
+    const discovered = models
       .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
       .map((model) => (model.name ?? "").replace(/^models\//, ""))
       .filter((name) => name.length > 0);
+    cachedModelList = {
+      models: discovered,
+      expiresAt: Date.now() + MODEL_CACHE_TTL_MS
+    };
+    return discovered;
   } catch {
     return [];
   }
+}
+
+function safeJsonParse(raw: string): Partial<ExtractedInvoice> {
+  const tryParse = (value: string): Partial<ExtractedInvoice> | null => {
+    try {
+      return JSON.parse(value) as Partial<ExtractedInvoice>;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(raw);
+  if (direct) {
+    return direct;
+  }
+
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const sliced = raw.slice(firstBrace, lastBrace + 1);
+    const recovered = tryParse(sliced);
+    if (recovered) {
+      return recovered;
+    }
+  }
+
+  throw new Error("Gemini returned invalid JSON format.");
 }

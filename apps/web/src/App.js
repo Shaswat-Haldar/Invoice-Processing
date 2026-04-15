@@ -19,6 +19,8 @@ export default function App() {
     const [isSavingEdits, setIsSavingEdits] = useState(false);
     const [isApproving, setIsApproving] = useState(false);
     const [draftExtracted, setDraftExtracted] = useState(null);
+    const [processingProgress, setProcessingProgress] = useState(0);
+    const [processingSeconds, setProcessingSeconds] = useState(0);
     const selectedStatus = selectedInvoice?.status;
     const isProcessing = selectedStatus === "queued" || selectedStatus === "processing";
     useEffect(() => {
@@ -78,6 +80,30 @@ export default function App() {
     useEffect(() => {
         setDraftExtracted(selectedInvoice?.extracted ? deepCloneExtracted(selectedInvoice.extracted) : null);
     }, [selectedInvoice?.id, selectedInvoice?.updatedAt]);
+    useEffect(() => {
+        if (!isProcessing) {
+            if (processingProgress > 0) {
+                setProcessingProgress(100);
+                const timer = window.setTimeout(() => {
+                    setProcessingProgress(0);
+                    setProcessingSeconds(0);
+                }, 600);
+                return () => window.clearTimeout(timer);
+            }
+            return;
+        }
+        setProcessingProgress((prev) => (prev <= 0 ? 8 : prev));
+        const start = Date.now();
+        const interval = window.setInterval(() => {
+            const elapsedSec = Math.floor((Date.now() - start) / 1000);
+            setProcessingSeconds(elapsedSec);
+            setProcessingProgress((prev) => {
+                const next = prev + (prev < 75 ? 3 : prev < 90 ? 1.2 : 0.4);
+                return Math.min(95, next);
+            });
+        }, 500);
+        return () => window.clearInterval(interval);
+    }, [isProcessing]);
     useEffect(() => {
         window.localStorage.setItem(LOCAL_SELECTED_KEY, selectedId);
     }, [selectedId]);
@@ -225,11 +251,78 @@ export default function App() {
             return { ...prev, lineItems: nextItems };
         });
     }
+    function addAdditionalField() {
+        setDraftExtracted((prev) => {
+            if (!prev) {
+                return prev;
+            }
+            const baseKey = "custom_field";
+            let nextKey = baseKey;
+            let counter = 1;
+            while (Object.prototype.hasOwnProperty.call(prev.additionalFields, nextKey)) {
+                counter += 1;
+                nextKey = `${baseKey}_${counter}`;
+            }
+            return {
+                ...prev,
+                additionalFields: {
+                    ...prev.additionalFields,
+                    [nextKey]: ""
+                }
+            };
+        });
+    }
+    function renameAdditionalField(oldKey, newKeyRaw) {
+        const newKey = newKeyRaw.trim();
+        if (!newKey || newKey === oldKey) {
+            return;
+        }
+        setDraftExtracted((prev) => {
+            if (!prev || !Object.prototype.hasOwnProperty.call(prev.additionalFields, oldKey)) {
+                return prev;
+            }
+            if (Object.prototype.hasOwnProperty.call(prev.additionalFields, newKey)) {
+                return prev;
+            }
+            const next = { ...prev.additionalFields };
+            const existingValue = next[oldKey];
+            delete next[oldKey];
+            next[newKey] = existingValue;
+            return { ...prev, additionalFields: next };
+        });
+    }
+    function updateAdditionalFieldValue(key, value) {
+        setDraftExtracted((prev) => {
+            if (!prev) {
+                return prev;
+            }
+            return {
+                ...prev,
+                additionalFields: {
+                    ...prev.additionalFields,
+                    [key]: value
+                }
+            };
+        });
+    }
+    function removeAdditionalField(key) {
+        setDraftExtracted((prev) => {
+            if (!prev) {
+                return prev;
+            }
+            const next = { ...prev.additionalFields };
+            delete next[key];
+            return {
+                ...prev,
+                additionalFields: next
+            };
+        });
+    }
     return (_jsx("div", { className: "min-h-screen p-4 md:p-8", children: _jsxs("div", { className: "mx-auto max-w-7xl animate-fade-in", children: [_jsx("header", { className: "mb-6 rounded-2xl border border-slate-200 bg-white/70 p-5 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/70", children: _jsxs("div", { className: "flex flex-col gap-4 md:flex-row md:items-center md:justify-between", children: [_jsxs("div", { children: [_jsx("h1", { className: "text-2xl font-semibold md:text-3xl", children: "Invoice Processing Dashboard" }), _jsx("p", { className: "mt-1 text-sm text-slate-600 dark:text-slate-300", children: "Upload PDF or image invoices, extract structured data, and retry processing in one click." })] }), _jsx("button", { className: "rounded-xl border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium transition hover:scale-[1.02] hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700", onClick: () => setTheme((prev) => (prev === "light" ? "dark" : "light")), children: theme === "light" ? "Switch to Dark" : "Switch to Light" })] }) }), _jsxs("main", { className: "grid grid-cols-1 gap-4 lg:grid-cols-4", children: [_jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Upload Invoice" }), _jsxs("form", { onSubmit: onSubmit, className: "mt-4 space-y-3", children: [_jsx("label", { className: "block text-sm font-medium text-slate-700 dark:text-slate-200", children: "Select File" }), _jsx("input", { id: "invoice-file-input", type: "file", className: "w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-950", accept: ".pdf,image/png,image/jpeg,image/jpg,image/webp", onChange: (event) => setSelectedFile(event.target.files?.[0] ?? null) }), _jsxs("p", { className: "text-xs text-slate-500 dark:text-slate-400", children: ["Supported: PDF, PNG, JPG, JPEG, WEBP (max 8 MB)", selectedFile ? ` | Selected: ${selectedFile.name}` : ""] }), _jsx("button", { className: "w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:scale-[1.01] hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50", disabled: !canSubmit, children: isSubmitting ? "Submitting..." : "Upload & Process" })] }), error ? _jsx("p", { className: "mt-3 text-sm text-red-600 dark:text-red-400", children: error }) : null] }), _jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900", children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Invoices" }), _jsx("span", { className: "rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300", children: invoices.length })] }), invoices.length === 0 ? (_jsx("p", { className: "text-sm text-slate-500 dark:text-slate-400", children: "No invoices yet." })) : (_jsx("ul", { className: "space-y-2", children: invoices.map((invoice) => (_jsx("li", { children: _jsx("button", { className: `w-full rounded-xl border p-3 text-left transition ${selectedId === invoice.id
                                                 ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-950/40"
-                                                : "border-slate-200 bg-slate-50 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800/40"}`, onClick: () => setSelectedId(invoice.id), children: _jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx("span", { className: "truncate text-sm font-medium", children: invoice.fileName }), _jsx("span", { className: statusPillClass(invoice.status), children: invoice.status })] }) }) }, invoice.id))) }))] }), _jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900 lg:col-span-2", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Document Preview" }), _jsx("div", { className: "mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-950", children: previewDataUrl ? (previewMimeType === "application/pdf" ? (_jsx("iframe", { src: previewDataUrl, title: "Invoice PDF Preview", className: "h-[640px] w-full rounded-lg bg-white dark:bg-slate-900" })) : (_jsx("img", { src: previewDataUrl, alt: "Invoice Preview", className: "max-h-[640px] w-full rounded-lg object-contain" }))) : (_jsx("p", { className: "p-4 text-sm text-slate-500 dark:text-slate-400", children: "Select an invoice to preview." })) })] }), _jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900 lg:col-span-4", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Extracted Result" }), !selectedInvoice ? (_jsx("p", { className: "mt-3 text-sm text-slate-500 dark:text-slate-400", children: "Select or upload an invoice." })) : (_jsxs("div", { className: "mt-4 animate-slide-up space-y-4", children: [_jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("span", { className: "text-sm font-semibold", children: "Status:" }), _jsx("span", { className: statusPillClass(selectedInvoice.status), children: selectedInvoice.status }), isProcessing ? (_jsx("span", { className: "rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300", children: "Processing..." })) : null] }), selectedInvoice.errorMessage ? (_jsx("p", { className: `rounded-lg border p-3 text-sm ${selectedInvoice.status === "failed"
+                                                : "border-slate-200 bg-slate-50 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800/40"}`, onClick: () => setSelectedId(invoice.id), children: _jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx("span", { className: "truncate text-sm font-medium", children: invoice.fileName }), _jsx("span", { className: statusPillClass(invoice.status), children: invoice.status })] }) }) }, invoice.id))) }))] }), _jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900 lg:col-span-2", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Document Preview" }), _jsx("div", { className: "mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-950", children: previewDataUrl ? (previewMimeType === "application/pdf" ? (_jsx("iframe", { src: previewDataUrl, title: "Invoice PDF Preview", className: "h-[640px] w-full rounded-lg bg-white dark:bg-slate-900" })) : (_jsx("img", { src: previewDataUrl, alt: "Invoice Preview", className: "max-h-[640px] w-full rounded-lg object-contain" }))) : (_jsx("p", { className: "p-4 text-sm text-slate-500 dark:text-slate-400", children: "Select an invoice to preview." })) })] }), _jsxs("section", { className: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900 lg:col-span-4", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Extracted Result" }), !selectedInvoice ? (_jsx("p", { className: "mt-3 text-sm text-slate-500 dark:text-slate-400", children: "Select or upload an invoice." })) : (_jsxs("div", { className: "mt-4 animate-slide-up space-y-4", children: [_jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("span", { className: "text-sm font-semibold", children: "Status:" }), _jsx("span", { className: statusPillClass(selectedInvoice.status), children: selectedInvoice.status }), isProcessing ? (_jsx("span", { className: "rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300", children: "Processing..." })) : null] }), isProcessing ? (_jsxs("div", { className: "rounded-xl border border-slate-200 p-3 dark:border-slate-700", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300", children: [_jsx("span", { children: "Processing invoice extraction..." }), _jsxs("span", { children: [processingSeconds, "s"] })] }), _jsx("div", { className: "h-2 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800", children: _jsx("div", { className: "h-full rounded bg-blue-600 transition-all duration-500", style: { width: `${Math.max(0, Math.min(100, processingProgress))}%` } }) })] })) : null, selectedInvoice.errorMessage ? (_jsx("p", { className: `rounded-lg border p-3 text-sm ${selectedInvoice.status === "failed"
                                                 ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
-                                                : "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"}`, children: selectedInvoice.errorMessage })) : null, (selectedInvoice.status === "failed" || selectedInvoice.status === "needs_review") && (_jsx("button", { className: "rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700", disabled: isRetrying || isProcessing, onClick: () => void onRetryCurrentInvoice(), children: isRetrying ? "Retrying..." : "Retry Processing" })), draftExtracted ? (_jsxs(_Fragment, { children: [_jsxs("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-3", children: [_jsx(EditableText, { label: "Vendor", value: draftExtracted.vendorName, onChange: (value) => updateDraftField("vendorName", value) }), _jsx(EditableText, { label: "Invoice #", value: draftExtracted.invoiceNumber, onChange: (value) => updateDraftField("invoiceNumber", value) }), _jsx(EditableText, { label: "Invoice Date", value: draftExtracted.invoiceDate, onChange: (value) => updateDraftField("invoiceDate", value) }), _jsx(EditableText, { label: "Due Date", value: draftExtracted.dueDate ?? "", onChange: (value) => updateDraftField("dueDate", value || undefined) }), _jsx(EditableText, { label: "Currency", value: draftExtracted.currency, onChange: (value) => updateDraftField("currency", value.toUpperCase()) }), _jsx(Info, { label: "Confidence", value: `${Math.round(draftExtracted.confidence * 100)}%` })] }), _jsx("div", { className: "overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700", children: _jsxs("table", { className: "min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700", children: [_jsx("thead", { className: "bg-slate-50 dark:bg-slate-800/50", children: _jsxs("tr", { children: [_jsx("th", { className: "px-3 py-2 text-left font-semibold", children: "Description" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Qty" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Unit Price" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Amount" })] }) }), _jsx("tbody", { className: "divide-y divide-slate-200 dark:divide-slate-700", children: draftExtracted.lineItems.length > 0 ? (draftExtracted.lineItems.map((item, index) => (_jsxs("tr", { children: [_jsx("td", { className: "px-3 py-2", children: _jsx("input", { className: "w-full rounded border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-900", value: item.description, onChange: (event) => updateLineItem(index, "description", event.target.value) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.quantity, onChange: (event) => updateLineItem(index, "quantity", toNumber(event.target.value)) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.unitPrice, onChange: (event) => updateLineItem(index, "unitPrice", toNumber(event.target.value)) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.amount, onChange: (event) => updateLineItem(index, "amount", toNumber(event.target.value)) }) })] }, `${item.description}-${index}`)))) : (_jsx("tr", { children: _jsx("td", { className: "px-3 py-3 text-slate-500 dark:text-slate-400", colSpan: 4, children: "No line items extracted." }) })) })] }) }), _jsxs("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-3", children: [_jsx(EditableNumber, { label: "Sub Total", value: draftExtracted.subTotal, onChange: (value) => updateDraftField("subTotal", value), currency: draftExtracted.currency }), _jsx(EditableNumber, { label: "Tax", value: draftExtracted.tax, onChange: (value) => updateDraftField("tax", value), currency: draftExtracted.currency }), _jsx(EditableNumber, { label: "Total", value: draftExtracted.total, onChange: (value) => updateDraftField("total", value), currency: draftExtracted.currency })] }), _jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx("button", { className: "rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50", disabled: isSavingEdits, onClick: () => void onSaveEdits(), children: isSavingEdits ? "Saving..." : "Save Changes" }), _jsx("button", { className: "rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50", disabled: isApproving || !selectedInvoice.extracted, onClick: () => void onApproveInvoice(), children: isApproving ? "Approving..." : "Approve Invoice" }), _jsx("a", { className: "rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700", href: getInvoiceCsvDownloadUrl(selectedInvoice.id), download: true, children: "Download CSV" })] })] })) : null] }))] })] })] }) }));
+                                                : "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"}`, children: selectedInvoice.errorMessage })) : null, (selectedInvoice.status === "failed" || selectedInvoice.status === "needs_review") && (_jsx("button", { className: "rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700", disabled: isRetrying || isProcessing, onClick: () => void onRetryCurrentInvoice(), children: isRetrying ? "Retrying..." : "Retry Processing" })), draftExtracted ? (_jsxs(_Fragment, { children: [_jsxs("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-3", children: [_jsx(EditableText, { label: "Vendor", value: draftExtracted.vendorName, onChange: (value) => updateDraftField("vendorName", value) }), _jsx(EditableText, { label: "Invoice #", value: draftExtracted.invoiceNumber, onChange: (value) => updateDraftField("invoiceNumber", value) }), _jsx(EditableText, { label: "Invoice Date", value: draftExtracted.invoiceDate, onChange: (value) => updateDraftField("invoiceDate", value) }), _jsx(EditableText, { label: "Due Date", value: draftExtracted.dueDate ?? "", onChange: (value) => updateDraftField("dueDate", value || undefined) }), _jsx(EditableText, { label: "Currency", value: draftExtracted.currency, onChange: (value) => updateDraftField("currency", value.toUpperCase()) }), _jsx(Info, { label: "Confidence", value: `${Math.round(draftExtracted.confidence * 100)}%` })] }), _jsxs("div", { className: "rounded-xl border border-slate-200 p-3 dark:border-slate-700", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("h3", { className: "text-sm font-semibold", children: "Additional Categories / Fields" }), _jsx("button", { className: "rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700", onClick: () => addAdditionalField(), children: "Add Field" })] }), Object.keys(draftExtracted.additionalFields).length === 0 ? (_jsx("p", { className: "text-xs text-slate-500 dark:text-slate-400", children: "No additional fields extracted." })) : (_jsx("div", { className: "space-y-2", children: Object.entries(draftExtracted.additionalFields).map(([key, value]) => (_jsxs("div", { className: "grid grid-cols-1 gap-2 md:grid-cols-[1fr_2fr_auto]", children: [_jsx("input", { className: "rounded border border-slate-300 bg-white p-1 text-sm dark:border-slate-700 dark:bg-slate-900", value: key, onChange: (event) => renameAdditionalField(key, event.target.value) }), _jsx("input", { className: "rounded border border-slate-300 bg-white p-1 text-sm dark:border-slate-700 dark:bg-slate-900", value: value, onChange: (event) => updateAdditionalFieldValue(key, event.target.value) }), _jsx("button", { className: "rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-700", onClick: () => removeAdditionalField(key), children: "Remove" })] }, key))) }))] }), _jsx("div", { className: "overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700", children: _jsxs("table", { className: "min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700", children: [_jsx("thead", { className: "bg-slate-50 dark:bg-slate-800/50", children: _jsxs("tr", { children: [_jsx("th", { className: "px-3 py-2 text-left font-semibold", children: "Description" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Qty" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Unit Price" }), _jsx("th", { className: "px-3 py-2 text-right font-semibold", children: "Amount" })] }) }), _jsx("tbody", { className: "divide-y divide-slate-200 dark:divide-slate-700", children: draftExtracted.lineItems.length > 0 ? (draftExtracted.lineItems.map((item, index) => (_jsxs("tr", { children: [_jsx("td", { className: "px-3 py-2", children: _jsx("input", { className: "w-full rounded border border-slate-300 bg-white p-1 dark:border-slate-700 dark:bg-slate-900", value: item.description, onChange: (event) => updateLineItem(index, "description", event.target.value) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.quantity, onChange: (event) => updateLineItem(index, "quantity", toNumber(event.target.value)) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.unitPrice, onChange: (event) => updateLineItem(index, "unitPrice", toNumber(event.target.value)) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { type: "number", className: "w-full rounded border border-slate-300 bg-white p-1 text-right dark:border-slate-700 dark:bg-slate-900", value: item.amount, onChange: (event) => updateLineItem(index, "amount", toNumber(event.target.value)) }) })] }, `${item.description}-${index}`)))) : (_jsx("tr", { children: _jsx("td", { className: "px-3 py-3 text-slate-500 dark:text-slate-400", colSpan: 4, children: "No line items extracted." }) })) })] }) }), _jsxs("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-3", children: [_jsx(EditableNumber, { label: "Sub Total", value: draftExtracted.subTotal, onChange: (value) => updateDraftField("subTotal", value), currency: draftExtracted.currency }), _jsx(EditableNumber, { label: "Tax", value: draftExtracted.tax, onChange: (value) => updateDraftField("tax", value), currency: draftExtracted.currency }), _jsx(EditableNumber, { label: "Total", value: draftExtracted.total, onChange: (value) => updateDraftField("total", value), currency: draftExtracted.currency })] }), _jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx("button", { className: "rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50", disabled: isSavingEdits, onClick: () => void onSaveEdits(), children: isSavingEdits ? "Saving..." : "Save Changes" }), _jsx("button", { className: "rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50", disabled: isApproving || !selectedInvoice.extracted, onClick: () => void onApproveInvoice(), children: isApproving ? "Approving..." : "Approve Invoice" }), _jsx("a", { className: "rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-medium transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700", href: getInvoiceCsvDownloadUrl(selectedInvoice.id), download: true, children: "Download CSV" })] })] })) : null] }))] })] })] }) }));
 }
 function Info(props) {
     return (_jsxs("div", { className: "rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400", children: props.label }), _jsx("p", { className: "mt-1 text-sm font-semibold", children: props.value })] }));
@@ -324,7 +417,8 @@ function applyTheme(theme) {
 function deepCloneExtracted(extracted) {
     return {
         ...extracted,
-        lineItems: extracted.lineItems.map((item) => ({ ...item }))
+        lineItems: extracted.lineItems.map((item) => ({ ...item })),
+        additionalFields: { ...(extracted.additionalFields ?? {}) }
     };
 }
 function normalizeExtractedForSave(extracted) {
@@ -335,6 +429,9 @@ function normalizeExtractedForSave(extracted) {
         tax: toNumber(extracted.tax),
         total: toNumber(extracted.total),
         confidence: Math.min(1, Math.max(0, toNumber(extracted.confidence))),
+        additionalFields: Object.fromEntries(Object.entries(extracted.additionalFields ?? {})
+            .map(([key, value]) => [key.trim(), String(value).trim()])
+            .filter(([key, value]) => key.length > 0 && value.length > 0)),
         lineItems: extracted.lineItems.map((item) => ({
             description: item.description.trim() || "Item",
             quantity: toNumber(item.quantity),

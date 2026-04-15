@@ -23,6 +23,7 @@ export interface ExtractedInvoice {
   tax: number;
   total: number;
   lineItems: InvoiceLineItem[];
+  additionalFields: Record<string, string>;
   confidence: number;
 }
 
