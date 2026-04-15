@@ -1,0 +1,16 @@
+{
+  "name": "invoice-processor-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w api\" \"npm run dev -w web\" \"npm run dev -w worker\"",
+    "build": "npm run build -w api && npm run build -w web && npm run build -w worker",
+    "lint": "npm run lint -w api && npm run lint -w web && npm run lint -w worker"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
